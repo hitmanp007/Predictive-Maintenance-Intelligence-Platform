@@ -2,6 +2,7 @@ import joblib
 import pandas as pd
 import numpy as np
 import shap
+import os
 
 # Load the trained XGBoost pipeline
 final_model = joblib.load(
@@ -303,3 +304,124 @@ batch_results = predict_multiple_machines(sample_machines)
 
 print("\nMULTIPLE MACHINE PREDICTIONS")
 print(batch_results.to_string(index=False))    
+
+def predict_from_csv(file_path):
+
+    # Read CSV file
+    machine_data = pd.read_csv(file_path)
+
+    print("\nCSV file loaded successfully!")
+    print("Total machine records:", len(machine_data))
+
+    # Check required columns
+    missing_columns = [
+        col for col in FEATURE_COLUMNS
+        if col not in machine_data.columns
+    ]
+
+    if missing_columns:
+        raise ValueError(
+            f"Missing required columns: {missing_columns}"
+        )
+
+    if machine_data.empty:
+        raise ValueError("The CSV file contains no records.")
+
+    # Predict all machines
+    prediction_results = predict_multiple_machines(
+        machine_data[FEATURE_COLUMNS]
+    )
+
+    # Preserve original CSV columns
+    results = machine_data.copy()
+
+    # Add prediction results
+    results["Failure Probability (%)"] = (
+        prediction_results["Failure Probability (%)"]
+    )
+
+    results["Prediction"] = (
+        prediction_results["Prediction"]
+    )
+
+    results["Machine Status"] = (
+        prediction_results["Machine Status"]
+    )
+
+    # Create output directory
+    os.makedirs("outputs", exist_ok=True)
+
+    # Save prediction report
+    output_path = "outputs/machine_predictions.csv"
+
+    results.to_csv(output_path, index=False)
+
+    print("\nPrediction completed successfully!")
+    print("Total machines:", len(results))
+
+    print(
+        "Normal machines:",
+        (results["Prediction"] == 0).sum()
+    )
+
+    print(
+        "Machines with failure risk:",
+        (results["Prediction"] == 1).sum()
+    )
+
+    print("\nOutput saved at:", output_path)
+
+    return results
+
+
+csv_results = predict_from_csv("independent_test_data.csv")
+
+
+print("\nFirst 10 Prediction Results:")
+print(csv_results.head(10).to_string(index=False))
+
+from sklearn.metrics import (
+    confusion_matrix,
+    classification_report,
+    average_precision_score
+)
+
+
+def evaluate_csv_predictions(results):
+
+    if "Machine failure" not in results.columns:
+        raise ValueError(
+            "Actual Machine failure column is missing."
+        )
+
+    y_true = results["Machine failure"]
+    y_pred = results["Prediction"]
+    y_probability = results["Failure Probability (%)"] / 100
+
+    print("\nPREDICTION PERFORMANCE REPORT")
+    print("=" * 40)
+
+    print("\nActual Class Distribution:")
+    print(y_true.value_counts())
+
+    print("\nConfusion Matrix:")
+    print(confusion_matrix(y_true, y_pred))
+
+    print("\nClassification Report:")
+    print(
+        classification_report(
+            y_true,
+            y_pred,
+            target_names=["Normal", "Failure"]
+        )
+    )
+
+    print(
+        "PR-AUC:",
+        round(average_precision_score(
+            y_true,
+            y_probability
+        ), 4)
+    )
+    
+evaluate_csv_predictions(csv_results)    
