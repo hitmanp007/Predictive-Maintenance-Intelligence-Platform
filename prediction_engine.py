@@ -113,3 +113,193 @@ xgb_classifier = final_model.named_steps["classifier"]
 explainer = shap.TreeExplainer(xgb_classifier)
 
 print("SHAP Explainer initialized successfully!")
+
+def explain_machine_prediction(
+    machine_type,
+    air_temperature,
+    process_temperature,
+    rotational_speed,
+    torque,
+    tool_wear
+):
+    # Prepare machine input
+    machine_data = pd.DataFrame([{
+        "Type": machine_type,
+        "Air temperature [K]": air_temperature,
+        "Process temperature [K]": process_temperature,
+        "Rotational speed [rpm]": rotational_speed,
+        "Torque [Nm]": torque,
+        "Tool wear [min]": tool_wear
+    }], columns=FEATURE_COLUMNS)
+
+    # Apply the same preprocessing used by the trained model
+    transformed_input = preprocessor.transform(machine_data)
+
+    # Generate SHAP explanation
+    shap_explanation = explainer(transformed_input)
+
+    # Extract SHAP values for this machine
+    shap_values = shap_explanation.values[0]
+
+    # Get transformed feature names
+    feature_names = preprocessor.get_feature_names_out()
+
+    # Prepare feature contributions
+    contributions = []
+
+    for name, value in zip(feature_names, shap_values):
+
+        # Clean feature names for readability
+        readable_name = (
+            str(name)
+            .replace("num__", "")
+            .replace("cat__", "")
+            .replace("remainder__", "")
+        )
+
+        if readable_name == "Type_H":
+            readable_name = "Machine Type H"
+        elif readable_name == "Type_L":
+            readable_name = "Machine Type L"
+        elif readable_name == "Type_M":
+            readable_name = "Machine Type M"
+
+        contributions.append({
+            "feature": readable_name,
+            "shap_value": float(value),
+            "influence": (
+                "Increases failure risk"
+                if value > 0
+                else "Reduces failure risk"
+                if value < 0
+                else "No contribution"
+            )
+        })
+
+    # Sort by absolute SHAP contribution
+    contributions.sort(
+        key=lambda item: abs(item["shap_value"]),
+        reverse=True
+    )
+
+    return contributions
+
+
+explanation = explain_machine_prediction(
+    machine_type="M",
+    air_temperature=298.1,
+    process_temperature=308.6,
+    rotational_speed=1500,
+    torque=40,
+    tool_wear=120
+)
+
+print("\nMachine Prediction Explanation")
+print("--------------------------------")
+
+for item in explanation:
+    print(
+        item["feature"],
+        "| SHAP Value:", round(item["shap_value"], 4),
+        "|", item["influence"]
+    )
+    
+
+def predict_multiple_machines(machine_data):
+
+    # Check required columns
+    missing_columns = [
+        col for col in FEATURE_COLUMNS
+        if col not in machine_data.columns
+    ]
+
+    if missing_columns:
+        raise ValueError(
+            f"Missing required columns: {missing_columns}"
+        )
+
+    # Arrange columns in the correct order
+    machine_data = machine_data[FEATURE_COLUMNS].copy()
+
+    # Validate machine types
+    if not machine_data["Type"].isin(["L", "M", "H"]).all():
+        raise ValueError("Machine Type must be L, M, or H.")
+
+    # Validate numeric inputs
+    numeric_columns = [
+        "Air temperature [K]",
+        "Process temperature [K]",
+        "Rotational speed [rpm]",
+        "Torque [Nm]",
+        "Tool wear [min]"
+    ]
+
+    for col in numeric_columns:
+        machine_data[col] = pd.to_numeric(
+            machine_data[col],
+            errors="raise"
+        )
+
+    if not np.isfinite(
+        machine_data[numeric_columns].to_numpy()
+    ).all():
+        raise ValueError("Machine parameters must be finite.")
+
+    if (
+        (machine_data["Air temperature [K]"] <= 0).any()
+        or (machine_data["Process temperature [K]"] <= 0).any()
+        or (machine_data["Rotational speed [rpm]"] <= 0).any()
+        or (machine_data["Torque [Nm]"] < 0).any()
+        or (machine_data["Tool wear [min]"] < 0).any()
+    ):
+        raise ValueError("Invalid machine operating parameters.")
+
+    # Predict failure probabilities
+    probabilities = final_model.predict_proba(
+        machine_data
+    )[:, 1]
+
+    # Apply saved classification threshold
+    predictions = (probabilities >= best_threshold).astype(int)
+
+    # Generate results
+    results = machine_data.copy()
+
+    results["Failure Probability (%)"] = (
+        probabilities * 100
+    ).round(2)
+
+    results["Prediction"] = predictions
+
+    results["Machine Status"] = np.where(
+        predictions == 1,
+        "Failure Risk Detected",
+        "Normal"
+    )
+
+    return results
+
+    
+sample_machines = pd.DataFrame([
+    {
+        "Type": "M",
+        "Air temperature [K]": 298.1,
+        "Process temperature [K]": 308.6,
+        "Rotational speed [rpm]": 1500,
+        "Torque [Nm]": 40,
+        "Tool wear [min]": 120
+    },
+    {
+        "Type": "L",
+        "Air temperature [K]": 300.0,
+        "Process temperature [K]": 310.0,
+        "Rotational speed [rpm]": 1400,
+        "Torque [Nm]": 50,
+        "Tool wear [min]": 200
+    }
+])
+
+batch_results = predict_multiple_machines(sample_machines)
+
+print("\nMULTIPLE MACHINE PREDICTIONS")
+print(batch_results.to_string(index=False))    
