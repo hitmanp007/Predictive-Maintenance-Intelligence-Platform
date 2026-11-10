@@ -377,6 +377,8 @@ def predict_from_csv(file_path):
 csv_results = predict_from_csv("independent_test_data.csv")
 
 
+
+
 print("\nFirst 10 Prediction Results:")
 print(csv_results.head(10).to_string(index=False))
 
@@ -424,4 +426,137 @@ def evaluate_csv_predictions(results):
         ), 4)
     )
     
-evaluate_csv_predictions(csv_results)    
+evaluate_csv_predictions(csv_results)
+
+
+# generating the automated failure analysis
+def generate_failure_analysis(results, top_n=10):
+    """
+    Generate an automated summary and rank machines
+    by predicted failure probability.
+    """
+
+    required_columns = [
+        "Failure Probability (%)",
+        "Prediction",
+        "Machine Status"
+    ]
+
+    # Validate input
+    missing_columns = [
+        col for col in required_columns
+        if col not in results.columns
+    ]
+
+    if missing_columns:
+        raise ValueError(
+            f"Missing required columns: {missing_columns}"
+        )
+
+    if results.empty:
+        raise ValueError("No machine records available for analysis.")
+
+    analysis_data = results.copy()
+
+    # Ensure prediction values are numeric
+    analysis_data["Prediction"] = pd.to_numeric(
+        analysis_data["Prediction"], errors="raise"
+    )
+
+    analysis_data["Failure Probability (%)"] = pd.to_numeric(
+        analysis_data["Failure Probability (%)"], errors="raise"
+    )
+
+    if not analysis_data["Prediction"].isin([0, 1]).all():
+        raise ValueError("Prediction must contain only 0 or 1.")
+
+    if not analysis_data["Failure Probability (%)"].between(0, 100).all():
+        raise ValueError("Failure probabilities must be between 0 and 100.")
+
+    # Overall machine statistics
+    total_machines = len(analysis_data)
+
+    failure_risk_count = int(
+        (analysis_data["Prediction"] == 1).sum()
+    )
+
+    normal_count = int(
+        (analysis_data["Prediction"] == 0).sum()
+    )
+
+    failure_risk_percentage = (
+        failure_risk_count / total_machines
+    ) * 100
+
+    # Create summary
+    summary = {
+        "Total Machines Analysed": total_machines,
+        "Machines With Failure Risk": failure_risk_count,
+        "Normal Machines": normal_count,
+        "Failure Risk Percentage": round(
+            failure_risk_percentage, 2
+        )
+    }
+
+    summary_df = pd.DataFrame(
+        list(summary.items()),
+        columns=["Metric", "Value"]
+    )
+
+    # Rank machines by predicted failure probability
+    analysis_data.insert(
+        0,
+        "Machine Record",
+        range(1, total_machines + 1)
+    )
+
+    top_risk_machines = (
+        analysis_data[
+            analysis_data["Prediction"] == 1
+        ]
+        .sort_values(
+            by="Failure Probability (%)",
+            ascending=False
+        )
+        .head(top_n)
+        .reset_index(drop=True)
+    )
+
+    # Save reports
+    os.makedirs("outputs", exist_ok=True)
+
+    summary_df.to_csv(
+        "outputs/failure_analysis_summary.csv",
+        index=False
+    )
+
+    top_risk_machines.to_csv(
+        "outputs/top_risk_machines.csv",
+        index=False
+    )
+
+    print("\n========== FAILURE ANALYSIS REPORT ==========")
+    print(f"Total Machines Analysed: {total_machines}")
+    print(f"Machines With Failure Risk: {failure_risk_count}")
+    print(f"Normal Machines: {normal_count}")
+    print(f"Failure Risk: {failure_risk_percentage:.2f}%")
+
+    print(f"\n========== TOP {top_n} HIGH-RISK MACHINES ==========")
+
+    if top_risk_machines.empty:
+        print("No machines were flagged for failure risk.")
+    else:
+        print(
+            top_risk_machines[
+                ["Machine Record", "Failure Probability (%)", "Machine Status"]
+            ].to_string(index=False)
+        )
+
+    print("\nReports saved successfully:")
+    print("- outputs/failure_analysis_summary.csv")
+    print("- outputs/top_risk_machines.csv")
+
+    return summary_df, top_risk_machines
+    
+summary_df, top_risk_machines = generate_failure_analysis(csv_results)
+    
