@@ -5,3 +5,4 @@ process_data_copy.csv
 independent_test_data.csv
 __pycache__
 invalid_test.csv
+empty_test.csv
